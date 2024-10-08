@@ -761,6 +761,7 @@ Backend-only flags (these can be set in the config file also).
       --oos-copy-cutoff SizeSuffix                          Cutoff for switching to multipart copy (default 4.656Gi)
       --oos-copy-timeout Duration                           Timeout for copy (default 1m0s)
       --oos-description string                              Description of the remote
+      --oos-directory-markers                               Upload an empty object with a trailing slash when a new directory is created
       --oos-disable-checksum                                Don't store MD5 checksum with object metadata
       --oos-encoding Encoding                               The encoding for the backend (default Slash,InvalidUtf8,Dot)
       --oos-endpoint string                                 Endpoint for Object storage API

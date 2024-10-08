@@ -90,6 +90,10 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		GetTier:           true,
 		SlowModTime:       true,
 	}).Fill(ctx, f)
+
+	if opt.DirectoryMarkers {
+		f.features.CanHaveEmptyDirectories = true
+	}
 	if f.rootBucket != "" && f.rootDirectory != "" && !strings.HasSuffix(root, "/") {
 		// Check to see if the (bucket,directory) is actually an existing file
 		oldRoot := f.root
@@ -266,6 +270,7 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 		request.Delimiter = common.String(delimiter)
 	}
 
+	foundItems := 0
 	for {
 		var resp objectstorage.ListObjectsResponse
 		err = f.pacer.Call(func() (bool, error) {
@@ -294,6 +299,7 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 			return err
 		}
 		if !recurse {
+			foundItems += len(resp.ListObjects.Prefixes)
 			for _, commonPrefix := range resp.ListObjects.Prefixes {
 				if commonPrefix == "" {
 					fs.Logf(f, "Nil common prefix received")
@@ -316,6 +322,7 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 				}
 			}
 		}
+		foundItems += len(resp.Objects)
 		for i := range resp.Objects {
 			object := &resp.Objects[i]
 			// Finish if file name no longer has prefix
@@ -327,15 +334,20 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 			if !strings.HasPrefix(remote, prefix) {
 				continue
 			}
-			remote = remote[len(prefix):]
 			// Check for directory
 			isDirectory := remote == "" || strings.HasSuffix(remote, "/")
-			if addBucket {
-				remote = path.Join(bucket, remote)
-			}
 			// is this a directory marker?
 			if isDirectory && object.Size != nil && *object.Size == 0 {
-				continue // skip directory marker
+				// Don't insert the root directory
+				if remote == f.opt.Enc.ToStandardPath(directory) {
+					continue
+				}
+				// process directory markers as directories
+				remote = strings.TrimRight(remote, "/")
+			}
+			remote = remote[len(prefix):]
+			if addBucket {
+				remote = path.Join(bucket, remote)
 			}
 			if isDirectory && len(remote) > 1 {
 				remote = remote[:len(remote)-1]
@@ -350,6 +362,21 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 			break
 		}
 		request.Start = resp.NextStartWith
+	}
+	if f.opt.DirectoryMarkers && foundItems == 0 && directory != "" {
+		// Determine whether the directory exists or not by whether it has a marker
+		req := objectstorage.HeadObjectRequest{
+			NamespaceName: common.String(f.opt.Namespace),
+			BucketName:    common.String(bucket),
+			ObjectName:    common.String(directory),
+		}
+		_, err := f.headObject(ctx, &req)
+		if err != nil {
+			if err == fs.ErrorObjectNotFound {
+				return fs.ErrorDirNotFound
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -479,10 +506,68 @@ func (f *Fs) PutStream(ctx context.Context, in io.Reader, src fs.ObjectInfo, opt
 	return f.Put(ctx, in, src, options...)
 }
 
+// Create directory marker file and parents
+func (f *Fs) createDirectoryMarker(ctx context.Context, bucketName, dir string) error {
+	if !f.opt.DirectoryMarkers || bucketName == "" {
+		return nil
+	}
+
+	// Object to be uploaded
+	o := &Object{
+		fs:           f,
+		lastModified: time.Now(),
+	}
+
+	for {
+		_, bucketPath := f.split(dir)
+		// Don't create the directory marker if it is the bucket or at the very root
+		if bucketPath == "" {
+			break
+		}
+		o.remote = dir + "/"
+
+		// Check to see if object already exists
+		_, err := o.headObject(ctx)
+		if err == nil {
+			return nil
+		}
+
+		// Upload it if not
+		fs.Debugf(o, "Creating directory marker")
+		content := io.Reader(strings.NewReader(""))
+		err = o.Update(ctx, content, o)
+		if err != nil {
+			return fmt.Errorf("creating directory marker failed: %w", err)
+		}
+
+		// Now check parent directory exists
+		dir = path.Dir(dir)
+		if dir == "/" || dir == "." {
+			break
+		}
+	}
+
+	return nil
+}
+
 // Mkdir creates the bucket if it doesn't exist
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	bucketName, _ := f.split(dir)
-	return f.makeBucket(ctx, bucketName)
+	e := f.makeBucket(ctx, bucketName)
+	if e != nil {
+		return e
+	}
+	return f.createDirectoryMarker(ctx, bucketName, dir)
+}
+
+// mkdirParent creates the parent bucket/directory if it doesn't exist
+func (f *Fs) mkdirParent(ctx context.Context, remote string) error {
+	remote = strings.TrimRight(remote, "/")
+	dir := path.Dir(remote)
+	if dir == "/" || dir == "." {
+		dir = ""
+	}
+	return f.Mkdir(ctx, dir)
 }
 
 // makeBucket creates the bucket if it doesn't exist
@@ -545,6 +630,18 @@ func (f *Fs) bucketExists(ctx context.Context, bucketName string) (bool, error) 
 // Rmdir delete an empty bucket. if bucket is not empty this is will fail with appropriate error
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	bucketName, directory := f.split(dir)
+	// Remove directory marker file
+	if f.opt.DirectoryMarkers && bucketName != "" && dir != "" {
+		o := &Object{
+			fs:     f,
+			remote: dir + "/",
+		}
+		fs.Debugf(o, "Removing directory marker")
+		err := o.Remove(ctx)
+		if err != nil {
+			return fmt.Errorf("removing directory marker failed: %w", err)
+		}
+	}
 	if bucketName == "" || directory != "" {
 		return nil
 	}

@@ -60,6 +60,7 @@ type Options struct {
 	ChunkSize            fs.SizeSuffix        `config:"chunk_size"`
 	MaxUploadParts       int                  `config:"max_upload_parts"`
 	UploadConcurrency    int                  `config:"upload_concurrency"`
+	DirectoryMarkers     bool                 `config:"directory_markers"`
 	DisableChecksum      bool                 `config:"disable_checksum"`
 	CopyCutoff           fs.SizeSuffix        `config:"copy_cutoff"`
 	CopyTimeout          fs.Duration          `config:"copy_timeout"`
@@ -232,6 +233,15 @@ Copy is an asynchronous operation, specify timeout to wait for copy to succeed
 `,
 		Default:  defaultCopyTimeoutDuration,
 		Advanced: true,
+	}, {
+		Name:     "directory_markers",
+		Default:  false,
+		Advanced: true,
+		Help: `Upload an empty object with a trailing slash when a new directory is created
+
+Empty folders are unsupported for bucket based remotes, this option creates an empty
+object ending with "/", to persist the folder.
+`,
 	}, {
 		Name: "disable_checksum",
 		Help: `Don't store MD5 checksum with object metadata.
