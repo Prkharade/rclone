@@ -542,6 +542,20 @@ Properties:
 - Type:        Duration
 - Default:     1m0s
 
+#### --oos-directory-markers
+
+Upload an empty object with a trailing slash when a new directory is created
+
+Empty folders are unsupported for bucket based remotes, this option creates an empty
+object ending with "/", to persist the folder.
+
+Properties:
+
+- Config:      directory_markers
+- Env Var:     RCLONE_OOS_DIRECTORY_MARKERS
+- Type:        bool
+- Default:     false
+
 #### --oos-disable-checksum
 
 Don't store MD5 checksum with object metadata.

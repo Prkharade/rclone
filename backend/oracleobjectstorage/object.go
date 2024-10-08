@@ -87,10 +87,14 @@ func (o *Object) headObject(ctx context.Context) (info *objectstorage.HeadObject
 		ObjectName:    common.String(objectPath),
 	}
 	useBYOKHeadObject(o.fs, &req)
+	return o.fs.headObject(ctx, &req)
+}
+
+func (f *Fs) headObject(ctx context.Context, req *objectstorage.HeadObjectRequest) (info *objectstorage.HeadObjectResponse, err error) {
 	var response objectstorage.HeadObjectResponse
-	err = o.fs.pacer.Call(func() (bool, error) {
+	err = f.pacer.Call(func() (bool, error) {
 		var err error
-		response, err = o.fs.srv.HeadObject(ctx, req)
+		response, err = f.srv.HeadObject(ctx, *req)
 		return shouldRetry(ctx, response.HTTPResponse(), err)
 	})
 	if err != nil {
@@ -99,10 +103,10 @@ func (o *Object) headObject(ctx context.Context) (info *objectstorage.HeadObject
 				return nil, fs.ErrorObjectNotFound
 			}
 		}
-		fs.Errorf(o, "Failed to head object: %v", err)
+		fs.Errorf(*req.ObjectName, "Failed to head object: %v", err)
 		return nil, err
 	}
-	o.fs.cache.MarkOK(bucketName)
+	f.cache.MarkOK(*req.BucketName)
 	return &response, err
 }
 
@@ -388,6 +392,13 @@ func isZeroLength(streamReader io.Reader) bool {
 // Update an object if it has changed
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	bucketName, _ := o.split()
+	// Create parent dir/bucket if not saving directory marker
+	if !strings.HasSuffix(o.remote, "/") {
+		err = o.fs.mkdirParent(ctx, o.remote)
+		if err != nil {
+			return err
+		}
+	}
 	err = o.fs.makeBucket(ctx, bucketName)
 	if err != nil {
 		return err

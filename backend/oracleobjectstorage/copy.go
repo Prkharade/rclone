@@ -24,6 +24,10 @@ import (
 // If it isn't possible then return fs.ErrorCantCopy
 func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
 	// fs.Debugf(f, "copying %v to %v", src.Remote(), remote)
+	mkdirErr := f.mkdirParent(ctx, remote)
+	if mkdirErr != nil {
+		return nil, mkdirErr
+	}
 	srcObj, ok := src.(*Object)
 	if !ok {
 		// fs.Debugf(src, "Can't copy - not same remote type")
